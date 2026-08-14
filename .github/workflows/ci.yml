@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # The regression suite runs on a timer too: the corpus grows with every
+    # attack the deployed system stops, so a passing run last week is not
+    # evidence about this week.
+    - cron: "0 */6 * * *"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: proxy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - name: install
+        working-directory: apps/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+      - name: test
+        working-directory: apps/api
+        run: python -m pytest -q
+
+  injectbench:
+    name: injectbench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: apps/api/requirements.txt
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r apps/api/requirements.txt
+          pip install pytest
+      - name: run the benchmark
+        working-directory: apps/bench
+        # --strict exits non-zero unless all three targets are met together.
+        run: python -m injectbench --label ci --json results.json --strict
+      - name: regression suite
+        working-directory: apps/bench
+        run: python -m pytest -q
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: injectbench-results
+          path: apps/bench/results.json
+
+  web:
+    name: dashboard build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - working-directory: apps/web
+        run: npm ci || npm install
+      - name: typecheck
+        working-directory: apps/web
+        run: npx tsc --noEmit
+      - name: build
+        working-directory: apps/web
+        run: npm run build
+      - name: audit
+        working-directory: apps/web
+        run: npm audit --omit=dev --audit-level=high
+
+  containers:
+    name: container builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./apps/api
+          push: false
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./apps/web
+          push: false

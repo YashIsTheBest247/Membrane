@@ -1,0 +1,41 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "Segoe UI, Inter, sans-serif"
+    fontSize: "15px"
+    primaryColor: "#FFFFFF"
+    primaryTextColor: "#111111"
+    primaryBorderColor: "#BFBFBC"
+    lineColor: "#9A9A98"
+    actorBkg: "#FFFFFF"
+    actorBorder: "#111111"
+    actorTextColor: "#111111"
+    actorLineColor: "#D3D3D0"
+    signalColor: "#8C8C89"
+    signalTextColor: "#444444"
+    labelBoxBkg: "#FFFFFF"
+    labelBoxBorderColor: "#BFBFBC"
+    labelTextColor: "#111111"
+    noteBkgColor: "#111111"
+    noteTextColor: "#F7F7F5"
+    noteBorderColor: "#111111"
+    sequenceNumberColor: "#FFFFFF"
+---
+sequenceDiagram
+    autonumber
+    participant A as AGENT
+    participant M as MEMBRANE
+    participant T as TELEGRAM
+    participant O as OPERATOR
+
+    A->>M: wire_transfer(amount, iban)
+    M->>M: L3 — the IBAN traces back to a<br/>tainted span from a retrieved invoice
+    Note over M: HOLD — never a silent drop
+    M->>T: signed decision card
+    T->>O: what · why · provenance · diff
+    O-->>T: tap DENY
+    Note over T,O: 60-second timeout is also a denial
+    T-->>M: callback, HMAC verified, single use
+    M-->>A: tool call refused — agent continues safely
+    M->>M: verdict written to the append-only<br/>audit table before anything is released

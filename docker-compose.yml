@@ -1,0 +1,81 @@
+# Membrane, whole stack, one command.
+#
+# Deliberately ordinary: two containers, one Postgres, one Redis. No cluster,
+# no message broker, no infrastructure language. The point of that is that the
+# environment you demo in is the same one you deploy, and nothing has to be
+# learned on the day.
+#
+#   docker compose up --build
+#   dashboard  http://localhost:3000
+#   api docs   http://localhost:8080/docs
+
+name: membrane
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: membrane
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-membrane}
+      POSTGRES_DB: membrane
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U membrane -d membrane"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    # Not published: only the API talks to it.
+    expose:
+      - "5432"
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    expose:
+      - "6379"
+
+  api:
+    build:
+      context: ./apps/api
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      MEMBRANE_ENVIRONMENT: ${MEMBRANE_ENVIRONMENT:-dev}
+      MEMBRANE_DATABASE_URL: postgresql+asyncpg://membrane:${POSTGRES_PASSWORD:-membrane}@db:5432/membrane
+      MEMBRANE_REDIS_URL: redis://redis:6379/0
+      # Override both of these before this is exposed to anything real.
+      MEMBRANE_SIGNING_KEY: ${MEMBRANE_SIGNING_KEY:-dev-insecure-signing-key-change-me}
+      MEMBRANE_HASH_SALT: ${MEMBRANE_HASH_SALT:-dev-insecure-hash-salt-change-me}
+      MEMBRANE_CORS_ORIGINS: http://localhost:3000
+      # Optional: the human loop and the L2 model tier.
+      MEMBRANE_TELEGRAM_BOT_TOKEN: ${MEMBRANE_TELEGRAM_BOT_TOKEN:-}
+      MEMBRANE_TELEGRAM_CHAT_ID: ${MEMBRANE_TELEGRAM_CHAT_ID:-}
+      MEMBRANE_GEMINI_API_KEY: ${MEMBRANE_GEMINI_API_KEY:-}
+      MEMBRANE_VERTEX_PROJECT: ${MEMBRANE_VERTEX_PROJECT:-}
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_MEMBRANE_API: http://localhost:8080
+    depends_on:
+      - api
+    environment:
+      # The browser talks to the proxy directly, so this is the host-visible URL.
+      NEXT_PUBLIC_MEMBRANE_API: http://localhost:8080
+    ports:
+      - "3000:3000"
+
+volumes:
+  db-data:

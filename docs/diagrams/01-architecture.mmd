@@ -1,0 +1,61 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "Segoe UI, Inter, sans-serif"
+    fontSize: "15px"
+    primaryColor: "#FFFFFF"
+    primaryTextColor: "#111111"
+    primaryBorderColor: "#BFBFBC"
+    lineColor: "#9A9A98"
+    clusterBkg: "#F2F2EF"
+    clusterBorder: "#DDDDDA"
+    edgeLabelBackground: "#F7F7F5"
+  flowchart:
+    curve: basis
+    nodeSpacing: 30
+    rankSpacing: 60
+---
+flowchart LR
+    subgraph UZ["&nbsp;UNTRUSTED ZONE&nbsp;&nbsp;"]
+        direction TB
+        W["Web pages<br/>search results"]
+        E["Email &<br/>shared documents"]
+        P["PDFs, images<br/>file uploads"]
+        M["MCP tools &<br/>API responses"]
+    end
+
+    subgraph MB["&nbsp;MEMBRANE — semi-permeable barrier&nbsp;&nbsp;"]
+        direction TB
+        L1["<b>L1 SANITISER</b>&nbsp;<br/>zero-width · homoglyphs · hidden CSS<br/>alt-text · EXIF · nested encodings"]
+        L2["<b>L2 SEPARATOR</b>&nbsp;<br/>declarative content vs imperative spans<br/>deterministic tier, model escalation"]
+        L3["<b>L3 TAINT TRACKER</b>&nbsp;<br/>provenance label on every span<br/>lineage resolution for tool arguments"]
+        L4["<b>L4 CAPABILITY FIREWALL</b>&nbsp;<br/>signed, time-limited intent contract<br/>out-of-envelope calls are held"]
+        L1 --> L2 --> L3 --> L4
+    end
+
+    subgraph TZ["&nbsp;TRUSTED ZONE&nbsp;&nbsp;"]
+        direction TB
+        AG["<b>LLM AGENT</b>&nbsp;<br/>planner · memory · executor"]
+        EG["<b>EGRESS RE-CHECK</b>&nbsp;<br/>every outbound tool call is<br/>traced and inspected again"]
+        TL["<b>PRIVILEGED TOOLS</b>&nbsp;<br/>mail · payments · files · shell"]
+        AG --> EG --> TL
+    end
+
+    W --> L1
+    E --> L1
+    P --> L1
+    M --> L1
+    L4 == "clean context" ==> AG
+
+    EG -. "held" .-> HL["<b>TELEGRAM</b>&nbsp;<br/>one-tap approve / deny<br/>silence is denial"]
+    EG -. "every verdict" .-> AU["<b>AUDIT TRAIL</b>&nbsp;<br/>hash-chained, content-free<br/>Redis to PostgreSQL"]
+
+    classDef untrusted fill:#E4E4E0,stroke:#8C8C89,color:#111111
+    classDef layer fill:#FFFFFF,stroke:#111111,color:#111111
+    classDef trusted fill:#FFFFFF,stroke:#BFBFBC,color:#111111
+    classDef side fill:#F2F2EF,stroke:#BFBFBC,color:#444444
+    class W,E,P,M untrusted
+    class L1,L2,L3,L4 layer
+    class AG,TL trusted
+    class EG,HL,AU side

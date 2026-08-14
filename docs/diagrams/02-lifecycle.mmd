@@ -1,0 +1,38 @@
+---
+config:
+  theme: base
+  themeVariables:
+    fontFamily: "Segoe UI, Inter, sans-serif"
+    fontSize: "15px"
+    primaryColor: "#FFFFFF"
+    primaryTextColor: "#111111"
+    primaryBorderColor: "#BFBFBC"
+    lineColor: "#9A9A98"
+    clusterBkg: "#F2F2EF"
+    clusterBorder: "#DDDDDA"
+---
+flowchart TB
+    subgraph PATH["&nbsp;SIX STAGES — p95 added latency under 100 ms&nbsp;&nbsp;"]
+        direction LR
+        S1["1 · INGEST<br/>untrusted bytes arrive"] --> S2["2 · NORMALISE<br/>unicode fold, strip invisibles"]
+        S2 --> S3["3 · CLASSIFY<br/>content vs instruction"]
+        S3 --> S4["4 · TAINT<br/>attach provenance"]
+        S4 --> S5["5 · ENVELOPE<br/>check intent contract"]
+        S5 --> S6["6 · DECIDE<br/>one of four verdicts"]
+    end
+
+    S6 --> V1["PASS<br/>clean content reaches<br/>the agent unchanged"]
+    S6 --> V2["STRIP<br/>payload excised, benign<br/>remainder forwarded"]
+    S6 --> V3["HOLD<br/>frozen, pushed to a<br/>human for a decision"]
+    S6 --> V4["BLOCK<br/>refused, logged,<br/>fully replayable"]
+
+    classDef stage fill:#FFFFFF,stroke:#BFBFBC,color:#111111
+    classDef v1 fill:#FFFFFF,stroke:#DDDDDA,color:#444444
+    classDef v2 fill:#F2F2EF,stroke:#C9C9C6,color:#333333
+    classDef v3 fill:#E4E4E0,stroke:#8C8C89,color:#222222
+    classDef v4 fill:#111111,stroke:#111111,color:#F7F7F5
+    class S1,S2,S3,S4,S5,S6 stage
+    class V1 v1
+    class V2 v2
+    class V3 v3
+    class V4 v4

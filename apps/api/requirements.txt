@@ -1,0 +1,21 @@
+# Core proxy
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+httpx>=0.27,<1.0
+
+# Storage
+sqlmodel>=0.0.22,<0.1
+SQLAlchemy[asyncio]>=2.0,<3.0
+aiosqlite>=0.20,<1.0
+greenlet>=3.1
+alembic>=1.14,<2.0
+
+# L1 sanitisation
+beautifulsoup4>=4.12,<5.0
+pypdf>=5.1,<7.0
+pillow>=11.0
+
+# Policy files and the benchmark corpus
+PyYAML>=6.0,<7.0
