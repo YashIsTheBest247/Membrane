@@ -277,52 +277,75 @@ async def expire_stale() -> int:
     return count
 
 
+# A resolve() signals its waiter before the enclosing transaction commits, so a
+# decision can be announced a few milliseconds before it is readable. Treating
+# that window as silence would record a human's answer as a timeout, so the
+# deadline gets a bounded grace period once a signal has actually arrived.
+COMMIT_GRACE_SECONDS = 2.0
+
+
+async def _committed_status(action_id: str) -> ApprovalStatus | None:
+    """The status as durably recorded. None if the action has gone."""
+    async with session_scope() as session:
+        action = await get(session, action_id)
+        return action.status if action is not None else None
+
+
 async def wait_for_decision(action_id: str, timeout: float | None = None) -> ApprovalStatus:
     """Block until the human decides, or the card expires.
 
     The timeout resolves to EXPIRED, which the caller treats as denial. There is
     no branch here that returns APPROVED without a recorded human decision.
+
+    Only *committed* state is ever returned. The in-process event is a wake-up
+    hint, never the answer — which also means a resolution that landed on
+    another instance is picked up by the same loop.
     """
     settings = get_settings()
     deadline = timeout if timeout is not None else settings.approval_timeout_seconds
+    loop = asyncio.get_running_loop()
+    expires_at = loop.time() + deadline
     event = _waiters.setdefault(action_id, asyncio.Event())
 
-    async def poll_database() -> ApprovalStatus:
-        # Covers resolutions that landed on another instance.
-        while True:
-            async with session_scope() as session:
-                action = await get(session, action_id)
-                if action is not None and action.status is not ApprovalStatus.PENDING:
-                    return action.status
-            await asyncio.sleep(0.25)
-
-    waiter = asyncio.create_task(event.wait())
-    poller = asyncio.create_task(poll_database())
     try:
-        done, _ = await asyncio.wait(
-            {waiter, poller}, timeout=deadline, return_when=asyncio.FIRST_COMPLETED
-        )
+        while True:
+            status = await _committed_status(action_id)
+            if status is None:
+                return ApprovalStatus.EXPIRED
+            if status is not ApprovalStatus.PENDING:
+                return status
+
+            now = loop.time()
+            if now >= expires_at:
+                # Someone signalled but their write has not landed yet: wait a
+                # little rather than calling a decided action a timeout.
+                if event.is_set() and now < expires_at + COMMIT_GRACE_SECONDS:
+                    await asyncio.sleep(0.05)
+                    continue
+                break
+
+            if event.is_set():
+                # Signalled; poll for the commit rather than spinning on the
+                # event, which would return immediately every time.
+                await asyncio.sleep(0.05)
+            else:
+                try:
+                    await asyncio.wait_for(event.wait(),
+                                           timeout=min(0.25, expires_at - now))
+                except asyncio.TimeoutError:
+                    pass
     finally:
-        for task in (waiter, poller):
-            if not task.done():
-                task.cancel()
-
-    _waiters.pop(action_id, None)
-
-    if poller in done and not poller.cancelled():
-        try:
-            return poller.result()
-        except asyncio.CancelledError:  # pragma: no cover
-            pass
+        _waiters.pop(action_id, None)
 
     async with session_scope() as session:
         action = await get(session, action_id)
-        if action is not None and action.status is not ApprovalStatus.PENDING:
+        if action is None:
+            return ApprovalStatus.EXPIRED
+        if action.status is not ApprovalStatus.PENDING:
             return action.status
-        if action is not None:
-            action.status = ApprovalStatus.EXPIRED
-            action.resolved_at = utcnow()
-            action.resolved_by = "timeout"
+        action.status = ApprovalStatus.EXPIRED
+        action.resolved_at = utcnow()
+        action.resolved_by = "timeout"
 
     await bus.publish("approval.expired", {
         "action_id": action_id,

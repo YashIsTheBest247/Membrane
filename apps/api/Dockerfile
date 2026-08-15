@@ -10,8 +10,7 @@ WORKDIR /app
 
 # Dependencies first, so a code change does not reinstall the world.
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
- && pip install --no-cache-dir "asyncpg>=0.30,<1.0" "redis>=5.2,<7.0"
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY membrane ./membrane
 
@@ -25,5 +24,6 @@ ENV PORT=8080
 
 HEALTHCHECK --interval=30s --timeout=4s --start-period=10s --retries=3   CMD python -c "import os,sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT','8080') + '/healthz', timeout=3).status == 200 else 1)"
 
-# Cloud Run supplies $PORT; the shell form expands it.
-CMD exec uvicorn membrane.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers
+# JSON form so signals reach uvicorn directly; sh -c so $PORT still expands,
+# which the platform supplies at run time.
+CMD ["sh", "-c", "exec uvicorn membrane.main:app --host 0.0.0.0 --port ${PORT:-8080} --proxy-headers"]

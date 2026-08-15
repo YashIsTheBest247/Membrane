@@ -1,420 +1,226 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+/**
+ * The front door.
+ *
+ * A full-bleed hero over the particle field, with the claim broken across it:
+ * the half that survives on the left, the half that does not on the right,
+ * with the reaching hands between them. Below the fold, the four layers and
+ * the measured results — because "scroll to explore" should be true.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { api, FeedEvent, Stats, subscribe } from "@/lib/api";
-import { DemoStep, runAttackDemo } from "@/lib/demo";
-import { ErrorBanner, PageHead, Verdict } from "@/components/shell";
-import { Icon, IconChip, IconName } from "@/components/icons";
-import { AreaChart, BarList, Donut, Gauge, Sparkline } from "@/components/charts";
-import { useCountUp } from "@/components/hooks";
+import { MembraneMark } from "@/components/logo";
+import { GlobeCanvas } from "@/components/globe-canvas";
+import { playMembraneTransition } from "@/components/transition";
+import { Icon } from "@/components/icons";
 
-const MAX_FEED = 220;
-const BUCKETS = 30;
-const WINDOW_SECONDS = 15 * 60;
+const LAYERS = [
+  {
+    key: "L1",
+    name: "Sanitiser",
+    body: "Strips what a human could never see but a model reads perfectly — " +
+      "zero-width characters, Unicode tag blocks, homoglyphs, white-on-white " +
+      "text, nested encodings unwrapped to depth.",
+  },
+  {
+    key: "L2",
+    name: "Separator",
+    body: "Splits retrieved text into what it states and what it commands, " +
+      "scored on co-occurrence rather than keywords. Imperative spans are " +
+      "quarantined; the narrative passes through untouched.",
+  },
+  {
+    key: "L3",
+    name: "Taint tracker",
+    body: "Every span carries its origin. Anything derived from retrieved text " +
+      "stays tainted through the whole session, so a laundered value cannot " +
+      "arrive at a tool call looking clean.",
+  },
+  {
+    key: "L4",
+    name: "Capability firewall",
+    body: "Tool calls are checked against a signed intent contract. Tainted " +
+      "arguments on a privileged capability are held for a human — and " +
+      "silence is treated as denial.",
+  },
+];
 
-const VERDICT_COLOR: Record<string, string> = {
-  pass: "var(--pass)",
-  strip: "var(--strip)",
-  hold: "var(--hold)",
-  block: "var(--block)",
-};
+const MEASURED = [
+  { value: "100%", head: "Attack success reduction", note: "42 of 42 stopped" },
+  { value: "1.33%", head: "False positive rate", note: "1 of 75 benign spans" },
+  { value: "21.1 ms", head: "Added latency, p95", note: "against a 100 ms budget" },
+  { value: "42", head: "Open benchmark cases", note: "across 9 attack families" },
+];
 
-const LAYER_LABEL: Record<string, string> = {
-  l1_sanitiser: "L1 sanitiser",
-  l2_separator: "L2 separator",
-  l3_taint: "L3 taint tracker",
-  l4_capability: "L4 capability",
-  egress: "Egress inspection",
-  mcp_scan: "MCP scanner",
-  breaker: "Circuit breaker",
-  approval: "Human loop",
-};
+const SECTIONS = [
+  { id: "top", label: "Home" },
+  { id: "layers", label: "Layers" },
+  { id: "results", label: "Results" },
+];
 
-const EVENT_ICON: Record<string, { icon: IconName; tone: string }> = {
-  ingest: { icon: "database", tone: "sky" },
-  "attack.blocked": { icon: "shield", tone: "block" },
-  "action.held": { icon: "lock", tone: "hold" },
-  "action.blocked": { icon: "close", tone: "block" },
-  "action.passed": { icon: "check", tone: "emerald" },
-  "approval.resolved": { icon: "check", tone: "violet" },
-  "approval.expired": { icon: "clock", tone: "rose" },
-  "breaker.tripped": { icon: "alert", tone: "block" },
-  "mcp.scanned": { icon: "plug", tone: "teal" },
-  "bench.completed": { icon: "trophy", tone: "amber" },
-};
+export default function LandingPage() {
+  const router = useRouter();
+  const [entering, setEntering] = useState(false);
+  const [active, setActive] = useState("top");
+  const scope = useRef<HTMLDivElement>(null);
 
-function timeOf(ts: number) {
-  return new Date(ts * 1000).toLocaleTimeString(undefined, { hour12: false });
-}
+  useEffect(() => { router.prefetch("/dashboard"); }, [router]);
 
-function verdictOf(event: FeedEvent): string {
-  if (event.verdict) return event.verdict;
-  if (event.kind === "approval.resolved") return event.status === "approved" ? "pass" : "block";
-  if (event.kind === "approval.expired" || event.kind === "breaker.tripped") return "block";
-  return "pass";
-}
-
-function describe(event: FeedEvent): string {
-  switch (event.kind) {
-    case "ingest":
-      return event.quarantined || event.removed
-        ? `${event.quarantined ?? 0} span(s) quarantined · ${event.removed ?? 0} hidden region(s) removed`
-        : `${event.spans ?? 0} span(s) passed through clean`;
-    case "attack.blocked": return event.reason ?? "payload removed";
-    case "action.held": return event.reason ?? "action held for a human decision";
-    case "action.blocked": return event.reason ?? "action refused";
-    case "action.passed": return event.reason ?? "action authorised";
-    case "approval.resolved":
-      return `${event.status} by ${(event as { resolved_by?: string }).resolved_by ?? "operator"}`;
-    case "approval.expired": return "no decision within the timeout — treated as denial";
-    case "breaker.tripped": return "circuit breaker tripped: privileged capabilities quarantined";
-    case "mcp.scanned": return `${event.server}: ${event.reason ?? ""}`;
-    case "bench.completed": return "InjectBench run recorded";
-    default: return event.reason ?? event.kind;
-  }
-}
-
-/** Bucket event timestamps into the rolling window. */
-function bucket(events: FeedEvent[], predicate: (e: FeedEvent) => boolean): number[] {
-  const now = Date.now() / 1000;
-  const start = now - WINDOW_SECONDS;
-  const width = WINDOW_SECONDS / BUCKETS;
-  const out = new Array(BUCKETS).fill(0);
-  for (const event of events) {
-    if (!predicate(event) || event.ts < start) continue;
-    const index = Math.min(BUCKETS - 1, Math.floor((event.ts - start) / width));
-    if (index >= 0) out[index] += 1;
-  }
-  return out;
-}
-
-function Tile({
-  icon, tone, value, label, note, spark, sparkColor, delta,
-}: {
-  icon: IconName; tone: string; value: number; label: string; note?: React.ReactNode;
-  spark: number[]; sparkColor: string; delta?: { value: string; dir: "up" | "down" | "flat" };
-}) {
-  const animated = useCountUp(value);
-  return (
-    <div className="card tile">
-      <div className="tile-head">
-        <IconChip name={icon} tone={tone} />
-        {delta ? (
-          <span className="delta" data-dir={delta.dir}>
-            {delta.dir !== "flat" && <Icon name={delta.dir} size={12} strokeWidth={2.2} />}
-            {delta.value}
-          </span>
-        ) : null}
-      </div>
-      <div className="stat-value">{Math.round(animated).toLocaleString()}</div>
-      <div className="stat-label">{label}</div>
-      {note ? <div className="stat-note">{note}</div> : null}
-      <Sparkline values={spark} color={sparkColor} />
-    </div>
-  );
-}
-
-export default function DashboardPage() {
-  const [events, setEvents] = useState<FeedEvent[]>([]);
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const [filter, setFilter] = useState<string>("all");
-  const [demoSteps, setDemoSteps] = useState<DemoStep[]>([]);
-  const [demoRunning, setDemoRunning] = useState(false);
-  const [demoSession, setDemoSession] = useState<string | null>(null);
-  const seeded = useRef(false);
-
-  const onEvent = useCallback((event: FeedEvent) => {
-    setEvents((current) => [event, ...current].slice(0, MAX_FEED));
-  }, []);
-
-  useEffect(() => subscribe(onEvent), [onEvent]);
-
+  // Light up the bottom nav for whichever section is under the viewport.
   useEffect(() => {
-    let alive = true;
-    const load = () => {
-      api.stats().then((d) => { if (alive) { setStats(d); setError(null); } })
-        .catch((e) => alive && setError(e));
-      if (!seeded.current) {
-        seeded.current = true;
-        api.recentFeed().then((d) => alive && setEvents(d.events)).catch(() => undefined);
-      }
-    };
-    load();
-    const timer = setInterval(load, 8_000);
-    return () => { alive = false; clearInterval(timer); };
+    const root = scope.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) setActive(entry.target.id);
+        }
+      },
+      { rootMargin: "-45% 0px -50% 0px" },
+    );
+    for (const { id } of SECTIONS) {
+      const el = root.querySelector(`#${id}`);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
   }, []);
 
-  const runDemo = async () => {
-    setDemoRunning(true);
-    setDemoSteps([]);
-    setDemoSession(null);
-    try {
-      const session = await runAttackDemo((step) =>
-        setDemoSteps((current) => [...current, step]));
-      setDemoSession(session);
-    } catch (exc) {
-      setDemoSteps((current) => [...current, {
-        label: "Demo failed",
-        detail: exc instanceof Error ? exc.message : String(exc),
-        tone: "block",
-      }]);
-    } finally {
-      setDemoRunning(false);
-    }
-  };
-
-  const verdicts = stats?.by_verdict ?? {};
-  const stopped = (verdicts.block ?? 0) + (verdicts.strip ?? 0);
-
-  const series = useMemo(() => [
-    {
-      label: "Content ingested",
-      color: "var(--sky)",
-      values: bucket(events, (e) => e.kind === "ingest"),
-    },
-    {
-      label: "Payloads stopped",
-      color: "var(--block)",
-      values: bucket(events, (e) => e.kind === "attack.blocked" || e.kind === "action.blocked"),
-    },
-    {
-      label: "Held for a human",
-      color: "var(--hold)",
-      values: bucket(events, (e) => e.kind === "action.held"),
-    },
-  ], [events]);
-
-  const tickLabels = useMemo(() => {
-    const now = Date.now();
-    const width = (WINDOW_SECONDS * 1000) / BUCKETS;
-    return Array.from({ length: BUCKETS }, (_, i) =>
-      new Date(now - (BUCKETS - 1 - i) * width)
-        .toLocaleTimeString(undefined, { hour12: false, hour: "2-digit", minute: "2-digit" }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [events.length]);
-
-  const donutSegments = (["pass", "strip", "hold", "block"] as const).map((v) => ({
-    label: v,
-    value: verdicts[v] ?? 0,
-    color: VERDICT_COLOR[v],
-  }));
-
-  const layerRows = Object.entries(stats?.by_layer ?? {})
-    .map(([layer, count]) => ({
-      label: LAYER_LABEL[layer] ?? layer,
-      value: count as number,
-      color: layer.startsWith("l1") ? "var(--sky)"
-        : layer.startsWith("l2") ? "var(--violet)"
-        : layer.startsWith("l3") ? "var(--teal)"
-        : layer.startsWith("l4") ? "var(--primary)"
-        : layer === "egress" ? "var(--amber)"
-        : "var(--rose)",
-    }))
-    .sort((a, b) => b.value - a.value);
-
-  const shown = events.filter((event) =>
-    filter === "all" ? true
-      : filter === "attacks"
-        ? ["attack.blocked", "action.held", "action.blocked", "breaker.tripped"].includes(event.kind)
-        : verdictOf(event) === filter);
-
-  const p95 = stats?.latency_ms.p95 ?? 0;
+  const enter = useCallback(() => {
+    if (entering) return;
+    setEntering(true);
+    const delay = playMembraneTransition();
+    setTimeout(() => router.push("/dashboard"), delay);
+  }, [entering, router]);
 
   return (
-    <>
-      <div className="row-between" style={{ marginBottom: 18, flexWrap: "wrap" }}>
-        <PageHead title="Live feed">
-          Every verdict the proxy reaches, as it reaches it. Previews come from
-          memory and are never written to the audit table.
-        </PageHead>
-        <button data-variant="primary" onClick={runDemo} disabled={demoRunning}>
-          <Icon name={demoRunning ? "refresh" : "play"} size={15} strokeWidth={2} />
-          {demoRunning ? "Running attack…" : "Run live attack"}
-        </button>
-      </div>
+    <div className="site" ref={scope}>
+      {/* ---------------------------------------------------------------- */}
+      <section className="hero" id="top">
+        <GlobeCanvas className="hero-canvas" />
+        <div className="hero-veil" aria-hidden="true" />
 
-      {error ? <ErrorBanner error={error} /> : null}
-
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Tile icon="shield" tone="block" value={stopped} label="Payloads stopped"
-              sparkColor="var(--block)"
-              spark={bucket(events, (e) => e.kind === "attack.blocked")}
-              note={<>
-                <span style={{ color: "var(--strip)" }}>{verdicts.strip ?? 0} stripped</span>
-                {" · "}
-                <span style={{ color: "var(--block)" }}>{verdicts.block ?? 0} blocked</span>
-              </>} />
-
-        <Tile icon="lock" tone="hold" value={verdicts.hold ?? 0}
-              label="Held for a human" sparkColor="var(--hold)"
-              spark={bucket(events, (e) => e.kind === "action.held")}
-              note="silence is treated as denial" />
-
-        <Tile icon="layers" tone="violet" value={stats?.sessions ?? 0}
-              label="Sessions audited" sparkColor="var(--violet)"
-              spark={bucket(events, (e) => e.kind === "ingest")}
-              note={`${stats?.corpus_entries ?? 0} payloads in the regression corpus`} />
-
-        <Tile icon="pulse" tone="teal" value={stats?.events ?? 0}
-              label="Decisions recorded" sparkColor="var(--teal)"
-              spark={bucket(events, () => true)}
-              note={`across the last ${stats?.window_hours ?? 24} hours`} />
-      </div>
-
-      <div className="grid grid-wide" style={{ marginBottom: 16 }}>
-        <div className="card">
-          <div className="row-between" style={{ marginBottom: 6 }}>
-            <div>
-              <div className="card-title" style={{ marginBottom: 2 }}>Pipeline activity</div>
-              <div className="card-sub">Rolling 15 minutes, live over server-sent events</div>
-            </div>
-            <span className="topbar-pill" data-live={true}>
-              <span className="dot" data-on={true} /> streaming
-            </span>
+        <header className="hero-top">
+          <div className="hero-brand">
+            <MembraneMark size={26} />
+            <span className="hero-brand-name">Membrane</span>
           </div>
-          <AreaChart series={series} tickLabels={tickLabels}
-                     labels={["15m ago", "10m", "5m", "now"]} height={228} />
-        </div>
+          {/* Deliberately not a second "Enter Membrane" — the hero owns that
+              call to action, and repeating it here just splits the click. */}
+          <Link href="/leaderboard" className="pill">
+            Benchmark
+            <span className="pill-arrow"><Icon name="arrow" size={13} strokeWidth={2} /></span>
+          </Link>
+        </header>
 
-        <div className="card">
-          <div className="card-title" style={{ marginBottom: 2 }}>Verdict mix</div>
-          <div className="card-sub" style={{ marginBottom: 16 }}>
-            Last {stats?.window_hours ?? 24} hours
-          </div>
-          <Donut segments={donutSegments} centerValue={stats?.events ?? 0}
-                 centerLabel="decisions" />
-        </div>
-      </div>
-
-      <div className="grid grid-3" style={{ marginBottom: 16 }}>
-        <div className="card">
-          <div className="card-title">Which layer stopped it</div>
-          <BarList rows={layerRows} />
-        </div>
-
-        <div className="card">
-          <div className="card-title">Added latency</div>
-          <Gauge value={p95} max={100} unit="ms" label="p95 · budget 100 ms"
-                 color={p95 > 100 ? "var(--block)" : "var(--emerald)"} />
-          <div className="row-between" style={{ marginTop: 14 }}>
-            {([["p50", stats?.latency_ms.p50], ["p95", stats?.latency_ms.p95],
-               ["p99", stats?.latency_ms.p99]] as const).map(([label, value]) => (
-              <div key={label} style={{ textAlign: "center", flex: 1 }}>
-                <div className="mono" style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>
-                  {typeof value === "number" ? value.toFixed(1) : "—"}
-                </div>
-                <div className="tiny faint">{label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="row-between" style={{ marginBottom: 12 }}>
-            <div className="card-title" style={{ margin: 0 }}>Attack demonstration</div>
-            {demoSession ? (
-              <Link href={`/sessions/${demoSession}`} className="tiny"
-                    style={{ color: "var(--primary)", fontWeight: 600 }}>
-                replay →
-              </Link>
-            ) : null}
-          </div>
-
-          {demoSteps.length === 0 ? (
-            <div className="tiny muted" style={{ lineHeight: 1.65 }}>
-              Runs the confused-deputy scenario against this proxy for real: a
-              vendor page carrying a hidden instruction <em>and</em> an
-              attacker-controlled billing address. Watch the feed and the
-              held-action badge react.
-              <div style={{ marginTop: 12 }}>
-                <button data-size="sm" onClick={runDemo} disabled={demoRunning}>
-                  <Icon name="play" size={13} strokeWidth={2} /> Run it
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="steps">
-              {demoSteps.map((step, index) => (
-                <div key={index} className="step" data-tone={step.tone}>
-                  <span className="step-dot" />
-                  <div style={{ minWidth: 0 }}>
-                    <div className="step-label">
-                      {step.label}
-                      {step.verdict ? <Verdict value={step.verdict} /> : null}
-                    </div>
-                    <div className="step-detail">{step.detail}</div>
-                  </div>
-                </div>
-              ))}
-              {demoRunning ? <div className="step-running">running…</div> : null}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="card" style={{ padding: 0 }}>
-        <div className="row-between"
-             style={{ padding: "15px 18px", borderBottom: "1px solid var(--border)" }}>
-          <div>
-            <div className="card-title" style={{ margin: 0 }}>Event stream</div>
-            <div className="card-sub">{shown.length} shown · {events.length} buffered</div>
-          </div>
-          <div className="wrap">
-            {[["all", "All"], ["attacks", "Attacks"], ["hold", "Held"],
-              ["block", "Blocked"], ["pass", "Passed"]].map(([value, label]) => (
-              <button key={value} data-size="sm" onClick={() => setFilter(value)}
-                      data-variant={filter === value ? "primary" : undefined}>
-                {label}
+        <div className="hero-body">
+          <div className="hero-left">
+            <span className="hero-eyebrow">[ &nbsp;Prompt injection&nbsp; ]</span>
+            <h1 className="hero-h1">
+              Content<br />passes.
+            </h1>
+            <div className="hero-cta">
+              <button className="pill pill-lg pill-solid" onClick={enter} disabled={entering}>
+                {entering ? "Entering…" : "Enter Membrane"}
+                <span className="pill-arrow"><Icon name="arrow" size={14} strokeWidth={2} /></span>
               </button>
-            ))}
+            </div>
+          </div>
+
+          {/* Reading order is headline then note; on desktop the note is
+              lifted above it with `order`, which is presentation only. */}
+          <div className="hero-right">
+            <h1 className="hero-h1">
+              Instructions<br />don&rsquo;t.
+            </h1>
+            <p className="hero-note">
+              Every page, email and tool response an agent reads is a message
+              from a stranger. Membrane separates what a document says from what
+              it asks for.
+            </p>
           </div>
         </div>
 
-        <div className="feed">
-          {shown.length === 0 ? (
-            <div className="empty">
-              Nothing yet — hit <strong>Run live attack</strong> above, or send a page
-              through <Link href="/playground" style={{ color: "var(--primary)" }}>the playground</Link>.
-            </div>
-          ) : shown.map((event, index) => {
-            const meta = EVENT_ICON[event.kind] ?? { icon: "pulse" as IconName, tone: "sky" };
-            return (
-              <div key={`${event.seq}-${event.ts}-${index}`} className="feed-item"
-                   data-fresh={index === 0}>
-                <span className="feed-icon chip" data-tone={meta.tone}>
-                  <Icon name={meta.icon} size={15} />
-                </span>
-                <span className="feed-time">{timeOf(event.ts)}</span>
-                <Verdict value={verdictOf(event)} />
-                <div className="feed-body">
-                  <div className="feed-reason">{describe(event)}</div>
-                  <div className="feed-meta">
-                    {event.layer ?? event.kind}
-                    {event.source ? ` · ${event.source}` : ""}
-                    {event.tool ? ` · ${event.tool}` : ""}
-                    {event.family ? ` · ${event.family}` : ""}
-                    {event.span ? ` · ${event.span.replace("sha256:", "").slice(0, 12)}` : ""}
-                  </div>
-                  {event.preview ? <div className="feed-preview">{event.preview}</div> : null}
-                </div>
-                <div style={{ textAlign: "right" }}>
-                  {event.session_id ? (
-                    <Link href={`/sessions/${event.session_id}`} className="tiny"
-                          style={{ color: "var(--primary)", fontWeight: 600 }}>
-                      replay
-                    </Link>
-                  ) : null}
-                  {typeof event.latency_ms === "number" ? (
-                    <div className="mono tiny faint">{event.latency_ms.toFixed(1)} ms</div>
-                  ) : null}
-                </div>
-              </div>
-            );
-          })}
+        <footer className="hero-bottom">
+          <a className="hero-scroll" href="#layers">
+            <Icon name="down" size={13} strokeWidth={2} /> Scroll to explore
+          </a>
+          <nav className="hero-nav">
+            {SECTIONS.map((section) => (
+              <a key={section.id} href={`#${section.id}`}
+                 className="hero-nav-item" data-active={active === section.id}>
+                <span className="sq sq-sm" />
+                {section.label}
+              </a>
+            ))}
+            <Link href="/leaderboard" className="hero-nav-item">Benchmark</Link>
+          </nav>
+          <span className="hero-meta">NullDeity · NGH26_132</span>
+        </footer>
+      </section>
+
+      {/* ---------------------------------------------------------------- */}
+      <section className="band" id="layers">
+        <div className="band-head">
+          <span className="tag"><span className="sq sq-sm" />Four layers</span>
+          <h2 className="band-title">
+            One decision, taken four times, before anything is allowed to happen.
+          </h2>
         </div>
-      </div>
-    </>
+        <div className="layer-grid">
+          {LAYERS.map((layer) => (
+            <article key={layer.key} className="layer">
+              <span className="layer-key">{layer.key}</span>
+              <h3 className="layer-name">{layer.name}</h3>
+              <p className="layer-body">{layer.body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------------------------------------------------------------- */}
+      <section className="band band-tight" id="results">
+        <div className="band-head">
+          <span className="tag"><span className="sq sq-sm" />InjectBench</span>
+          <h2 className="band-title">
+            Measured against 42 attacks and 75 benign spans. Reproducible.
+          </h2>
+        </div>
+        <div className="landing-stats">
+          {MEASURED.map((stat) => (
+            <div key={stat.value} className="landing-stat">
+              <div className="landing-stat-value">{stat.value}</div>
+              <div className="landing-stat-label">
+                <b>{stat.head}</b>
+                {stat.note}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="closer">
+          <h2 className="closer-title">See it stop one, live.</h2>
+          <p className="closer-sub">
+            The console runs the confused-deputy scenario against this proxy for
+            real — a vendor page carrying a hidden instruction and an
+            attacker-controlled billing address.
+          </p>
+          <div className="closer-actions">
+            <button className="pill pill-lg pill-solid" onClick={enter} disabled={entering}>
+              {entering ? "Entering…" : "Enter Membrane"}
+              <span className="pill-arrow"><Icon name="arrow" size={14} strokeWidth={2} /></span>
+            </button>
+            <Link href="/leaderboard" className="pill pill-lg">See the benchmark</Link>
+          </div>
+        </div>
+      </section>
+
+      <footer className="site-foot">
+        <span>Four layers · sanitiser · separator · taint tracker · capability firewall</span>
+        <span>Zero content retention · hash-chained audit</span>
+      </footer>
+    </div>
   );
 }

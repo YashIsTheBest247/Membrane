@@ -1,0 +1,79 @@
+# Membrane — production stack for a single host.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# What this overlay changes from the development compose:
+#   · Caddy terminates TLS on 80/443 and is the only thing exposed
+#   · the API and the dashboard are no longer published to the host
+#   · the dashboard is built against the public URL, since NEXT_PUBLIC_* is
+#     inlined at build time
+#   · everything restarts unless explicitly stopped
+#   · secrets come from the environment and have no defaults — the stack will
+#     refuse to start rather than boot with a dev key
+#
+# Required in .env.prod (see deploy/README.md):
+#   MEMBRANE_DOMAIN, POSTGRES_PASSWORD, MEMBRANE_SIGNING_KEY, MEMBRANE_HASH_SALT
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"          # HTTP/3
+    environment:
+      MEMBRANE_DOMAIN: ${MEMBRANE_DOMAIN:?set MEMBRANE_DOMAIN in .env.prod}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # certificates — losing this re-issues them
+      - caddy-config:/config
+      - caddy-logs:/var/log/caddy
+    depends_on:
+      - api
+      - web
+
+  db:
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}
+
+  redis:
+    restart: unless-stopped
+
+  api:
+    restart: unless-stopped
+    # Not published: Caddy reaches it over the compose network.
+    ports: !override []
+    environment:
+      MEMBRANE_ENVIRONMENT: prod
+      MEMBRANE_DATABASE_URL: postgresql+asyncpg://membrane:${POSTGRES_PASSWORD}@db:5432/membrane
+      MEMBRANE_REDIS_URL: redis://redis:6379/0
+      MEMBRANE_SIGNING_KEY: ${MEMBRANE_SIGNING_KEY:?generate with openssl rand -hex 32}
+      MEMBRANE_HASH_SALT: ${MEMBRANE_HASH_SALT:?generate with openssl rand -hex 32}
+      # Same origin as the dashboard, so this is belt and braces.
+      MEMBRANE_CORS_ORIGINS: https://${MEMBRANE_DOMAIN}
+      # Previews stream inspected text to the console. Never persisted, but
+      # there is no reason to emit them in production.
+      MEMBRANE_LIVE_PREVIEW_ENABLED: "false"
+      MEMBRANE_REPLAY_RETENTION_ENABLED: "false"
+      # Optional.
+      MEMBRANE_TELEGRAM_BOT_TOKEN: ${MEMBRANE_TELEGRAM_BOT_TOKEN:-}
+      MEMBRANE_TELEGRAM_CHAT_ID: ${MEMBRANE_TELEGRAM_CHAT_ID:-}
+      MEMBRANE_GEMINI_API_KEY: ${MEMBRANE_GEMINI_API_KEY:-}
+
+  web:
+    restart: unless-stopped
+    ports: !override []
+    build:
+      args:
+        # Inlined into the client bundle at build time, so it must be the URL
+        # the browser will use — not an internal hostname.
+        NEXT_PUBLIC_MEMBRANE_API: https://${MEMBRANE_DOMAIN}
+    environment:
+      NEXT_PUBLIC_MEMBRANE_API: https://${MEMBRANE_DOMAIN}
+
+volumes:
+  caddy-data:
+  caddy-config:
+  caddy-logs:

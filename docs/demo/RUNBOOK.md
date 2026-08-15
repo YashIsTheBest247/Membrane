@@ -36,10 +36,15 @@ be empty).
 
 | | |
 |---|---|
-| Browser | `http://localhost:3000` on the **Live feed**, full screen, zoom 100% |
+| Browser | `http://localhost:3000/dashboard` — the **Live feed**, full screen, zoom 100% |
 | Second tab | `http://localhost:3000/leaderboard` — for the numbers question |
 | Terminal | `docs/demo`, ready to type, large font |
 | Do not | leave the browser on Held actions — start on Live feed |
+
+`http://localhost:3000` is the landing page, not the console. If you want to
+open on it for effect, click **Enter Membrane** and let the transition run
+*before* you start talking — it is about two seconds, and it is dead air if
+you play it mid-sentence.
 
 ---
 

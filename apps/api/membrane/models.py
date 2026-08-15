@@ -20,6 +20,17 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _ts(*, index: bool = False, nullable: bool = False) -> sa.Column:
+    """A timezone-aware timestamp column.
+
+    Every datetime in this codebase is tz-aware UTC. SQLite stores whatever it
+    is given, so a naive column type goes unnoticed there — PostgreSQL rejects
+    the comparison outright, which took out the janitor that expires held
+    actions. `timezone=True` keeps both backends honest.
+    """
+    return sa.Column(sa.DateTime(timezone=True), index=index, nullable=nullable)
+
+
 def _enum(enum_class: type[enum.Enum]) -> sa.Enum:
     """Store an enum as its value, and read it back as the enum member.
 
@@ -98,9 +109,9 @@ class Session(SQLModel, table=True):
     id: str = Field(primary_key=True)
     subject: str = Field(default="anonymous", index=True)
     task_digest: str = Field(default="")
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    last_seen_at: datetime = Field(default_factory=utcnow)
-    breaker_tripped_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))
+    last_seen_at: datetime = Field(default_factory=utcnow, sa_column=_ts())
+    breaker_tripped_at: datetime | None = Field(default=None, sa_column=_ts(nullable=True))
     spans_seen: int = Field(default=0)
     holds: int = Field(default=0)
     blocks: int = Field(default=0)
@@ -116,11 +127,11 @@ class IntentContract(SQLModel, table=True):
     subject: str = Field(default="anonymous")
     task_digest: str = Field(default="")
     capabilities: list[str] = Field(default_factory=list, sa_column=sa.Column(sa.JSON))
-    issued_at: datetime = Field(default_factory=utcnow)
-    expires_at: datetime = Field(index=True)
+    issued_at: datetime = Field(default_factory=utcnow, sa_column=_ts())
+    expires_at: datetime = Field(sa_column=_ts(index=True))
     nonce: str = Field(default="")
     signature: str = Field(default="")
-    revoked_at: datetime | None = Field(default=None)
+    revoked_at: datetime | None = Field(default=None, sa_column=_ts(nullable=True))
 
 
 class AuditEvent(SQLModel, table=True):
@@ -131,7 +142,7 @@ class AuditEvent(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     session_id: str = Field(index=True)
     seq: int = Field(index=True)
-    created_at: datetime = Field(default_factory=utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))
     layer: Layer = Field(sa_column=sa.Column(_enum(Layer), index=True))
     verdict: Verdict = Field(sa_column=sa.Column(_enum(Verdict), index=True))
     span_hash: str | None = Field(default=None, index=True)
@@ -155,7 +166,7 @@ class ProvenanceEdge(SQLModel, table=True):
     parent_span_hash: str | None = Field(default=None, index=True)
     provenance: Provenance = Field(sa_column=sa.Column(_enum(Provenance)))
     source_ref: str = Field(default="")
-    created_at: datetime = Field(default_factory=utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_column=_ts())
 
 
 class HeldAction(SQLModel, table=True):
@@ -178,9 +189,9 @@ class HeldAction(SQLModel, table=True):
     status: ApprovalStatus = Field(
         default=ApprovalStatus.PENDING, sa_column=sa.Column(_enum(ApprovalStatus), index=True)
     )
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    expires_at: datetime = Field(default_factory=utcnow, index=True)
-    resolved_at: datetime | None = Field(default=None)
+    created_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))
+    expires_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))
+    resolved_at: datetime | None = Field(default=None, sa_column=_ts(nullable=True))
     resolved_by: str | None = Field(default=None)
     telegram_message_id: str | None = Field(default=None)
 
@@ -194,8 +205,8 @@ class SourceTrust(SQLModel, table=True):
     score: float = Field(default=0.70)
     incidents: int = Field(default=0)
     clean_spans: int = Field(default=0)
-    last_incident_at: datetime | None = Field(default=None)
-    updated_at: datetime = Field(default_factory=utcnow)
+    last_incident_at: datetime | None = Field(default=None, sa_column=_ts(nullable=True))
+    updated_at: datetime = Field(default_factory=utcnow, sa_column=_ts())
 
 
 class CorpusEntry(SQLModel, table=True):
@@ -207,8 +218,8 @@ class CorpusEntry(SQLModel, table=True):
     span_hash: str = Field(index=True, unique=True)
     family: str = Field(default="unclassified", index=True)
     signals: dict[str, Any] = Field(default_factory=dict, sa_column=sa.Column(sa.JSON))
-    first_seen_at: datetime = Field(default_factory=utcnow)
-    last_seen_at: datetime = Field(default_factory=utcnow)
+    first_seen_at: datetime = Field(default_factory=utcnow, sa_column=_ts())
+    last_seen_at: datetime = Field(default_factory=utcnow, sa_column=_ts())
     hits: int = Field(default=1)
     promoted: bool = Field(default=False)
 
@@ -219,7 +230,7 @@ class BenchRun(SQLModel, table=True):
     __tablename__ = "bench_runs"
 
     id: str = Field(primary_key=True)
-    created_at: datetime = Field(default_factory=utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))
     label: str = Field(default="local")
     total_cases: int = Field(default=0)
     unprotected_success: int = Field(default=0)
@@ -240,5 +251,5 @@ class ReplaySpan(SQLModel, table=True):
     session_id: str = Field(index=True)
     span_hash: str = Field(index=True)
     text: str = Field(default="")
-    created_at: datetime = Field(default_factory=utcnow, index=True)
-    expires_at: datetime = Field(default_factory=utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))
+    expires_at: datetime = Field(default_factory=utcnow, sa_column=_ts(index=True))

@@ -63,7 +63,10 @@ class Settings(BaseSettings):
     # --- model escalation (L2 tier two) ----------------------------------
     vertex_project: str | None = None
     vertex_location: str = "us-central1"
-    vertex_model: str = "gemini-2.0-flash"
+    # gemini-2.0-flash was retired by Google and now 404s. Anything from 2.5
+    # onward is a thinking model, which the classifier's request body accounts
+    # for — see _request_body.
+    vertex_model: str = "gemini-2.5-flash"
     vertex_timeout_seconds: float = 3.0
     # Simpler alternative to Vertex for local development: a Gemini API key.
     # When set it takes precedence over the Vertex path.
@@ -89,6 +92,11 @@ class Settings(BaseSettings):
 
     # --- server -----------------------------------------------------------
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    # An exact list cannot cover a platform that mints a new hostname per
+    # deployment — every Vercel preview is its own origin. This is matched in
+    # addition to the list above, never instead of it.
+    #   e.g. ^https://membrane-[a-z0-9-]+\.vercel\.app$
+    cors_origin_regex: str | None = None
 
     @property
     def cors_origin_list(self) -> list[str]:

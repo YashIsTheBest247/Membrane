@@ -126,8 +126,25 @@ async def _access_token() -> str | None:
         return None
 
 
-def _request_body(span: str) -> dict:
-    return {
+def _thinks(model: str) -> bool:
+    """Whether the model spends output budget on internal reasoning.
+
+    Gemini 2.5 and later do. Earlier ones reject `thinkingConfig` outright, so
+    this cannot simply be sent unconditionally.
+    """
+    name = model.rsplit("/", 1)[-1]
+    if not name.startswith("gemini-"):
+        return False
+    version = name[len("gemini-"):].split("-", 1)[0]
+    try:
+        major, _, minor = version.partition(".")
+        return (int(major), int(minor or 0)) >= (2, 5)
+    except ValueError:
+        return False
+
+
+def _request_body(span: str, model: str) -> dict:
+    body: dict = {
         "systemInstruction": {"parts": [{"text": _SYSTEM_INSTRUCTION}]},
         "contents": [{
             "role": "user",
@@ -136,11 +153,21 @@ def _request_body(span: str) -> dict:
         }],
         "generationConfig": {
             "temperature": 0.0,
-            "maxOutputTokens": 4,
+            # One word needs one token, but a thinking model charges its
+            # reasoning against the same budget. At the old cap of 4 the reply
+            # came back MAX_TOKENS with empty text on every single call, which
+            # the parser read as a failure and failed closed — the escalation
+            # tier looked configured and silently never adjudicated anything.
+            "maxOutputTokens": 16,
             "candidateCount": 1,
         },
         "safetySettings": [],
     }
+    if _thinks(model):
+        # Nothing here needs reasoning: it is a two-way classification against
+        # a fixed rubric, and thinking only buys latency we do not have.
+        body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+    return body
 
 
 def _extract_text(payload: dict) -> str:
@@ -163,7 +190,7 @@ async def classify_vertex(span: str, settings: Settings,
         url,
         headers={"Authorization": f"Bearer {token}",
                  "Content-Type": "application/json"},
-        json=_request_body(span),
+        json=_request_body(span, settings.vertex_model),
         timeout=settings.vertex_timeout_seconds,
     )
     response.raise_for_status()
@@ -177,7 +204,7 @@ async def classify_gemini_api(span: str, settings: Settings,
     response = await client.post(
         url,
         params={"key": settings.gemini_api_key},
-        json=_request_body(span),
+        json=_request_body(span, settings.vertex_model),
         timeout=settings.vertex_timeout_seconds,
     )
     response.raise_for_status()

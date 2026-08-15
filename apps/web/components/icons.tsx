@@ -22,7 +22,7 @@ export type IconName =
   | "pulse" | "shield" | "layers" | "flask" | "plug" | "gauge" | "trophy"
   | "search" | "bell" | "check" | "close" | "clock" | "up" | "down"
   | "external" | "chevron" | "filter" | "spark" | "lock" | "eye" | "hash"
-  | "refresh" | "play" | "database" | "alert";
+  | "refresh" | "play" | "database" | "alert" | "menu" | "arrow";
 
 export function Icon({ name, size = 18, strokeWidth = 1.7, className }: IconProps & { name: IconName }) {
   const p = { ...base(size, strokeWidth), className };
@@ -77,6 +77,10 @@ export function Icon({ name, size = 18, strokeWidth = 1.7, className }: IconProp
       return <svg {...p}><ellipse cx="12" cy="6" rx="7.5" ry="3" /><path d="M4.5 6v12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3V6" /><path d="M4.5 12c0 1.7 3.4 3 7.5 3s7.5-1.3 7.5-3" /></svg>;
     case "alert":
       return <svg {...p}><path d="M12 4.5l8.5 15h-17l8.5-15z" /><path d="M12 10v4" /><path d="M12 17.3v.2" /></svg>;
+    case "menu":
+      return <svg {...p}><path d="M4 7h16M4 12h16M4 17h16" /></svg>;
+    case "arrow":
+      return <svg {...p}><path d="M7 17L17 7" /><path d="M8.5 7H17v8.5" /></svg>;
   }
 }
 

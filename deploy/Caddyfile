@@ -1,0 +1,52 @@
+# Membrane — reverse proxy and automatic HTTPS.
+#
+# One domain serves both containers. The dashboard is the site root; everything
+# the API owns is routed to it by path. That means the browser talks to the same
+# origin it was served from, so there is no CORS to configure and no second
+# certificate to manage.
+#
+# Caddy obtains and renews the certificate from Let's Encrypt on its own. The
+# only prerequisite is that {$MEMBRANE_DOMAIN} already resolves to this host.
+
+{$MEMBRANE_DOMAIN} {
+	encode zstd gzip
+
+	# --- the proxy ---------------------------------------------------------
+	# Every path the API owns. Anything not listed here belongs to the
+	# dashboard, so adding an endpoint under /v1 needs no change to this file.
+	@api path /v1/* /healthz /readyz /docs /docs/* /openapi.json /redoc
+	handle @api {
+		reverse_proxy api:8080 {
+			# The live feed is server-sent events: it must not be buffered, and
+			# it must be allowed to stay open.
+			flush_interval -1
+			transport http {
+				read_timeout 0
+			}
+		}
+	}
+
+	# --- the dashboard -----------------------------------------------------
+	handle {
+		reverse_proxy web:3000
+	}
+
+	# --- headers -----------------------------------------------------------
+	header {
+		# The console is an operator tool; it should never be framed or sniffed.
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 20mb
+			roll_keep 5
+		}
+		# The proxy's own audit trail is the record that matters; these logs
+		# exist for debugging the edge, so keep them short-lived.
+	}
+}

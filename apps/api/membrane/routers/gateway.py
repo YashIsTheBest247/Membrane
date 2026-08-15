@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-from .. import contracts, pipeline
+from .. import audit, contracts, pipeline
 from ..config import get_settings
 from ..db import get_db
 from ..hashing import span_hash
@@ -61,6 +61,14 @@ async def issue_contract(
         task_digest=span_hash(body.task) if body.task else "",
         ttl_seconds=body.ttl_seconds,
     )
+
+    # The session row has to exist before the contract that references it.
+    # SQLite does not enforce foreign keys by default, so ordering here is only
+    # visibly required on PostgreSQL — which is exactly why it belongs in the
+    # code rather than in a comment.
+    await audit.touch_session(db, body.session_id, subject=body.subject,
+                              task_digest=claims.task_digest)
+    await db.flush()
 
     db.add(IntentContract(
         id=claims.contract_id,

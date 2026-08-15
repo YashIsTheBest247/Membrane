@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { api, API_BASE, subscribe } from "@/lib/api";
 import { MembraneMark } from "@/components/logo";
+import { MembraneTransition } from "@/components/transition";
 import { Icon, IconName } from "@/components/icons";
 
 const NAV: {
@@ -14,7 +15,7 @@ const NAV: {
   {
     section: "Operations",
     items: [
-      { href: "/", label: "Live feed", icon: "pulse" },
+      { href: "/dashboard", label: "Live feed", icon: "pulse" },
       { href: "/approvals", label: "Held actions", icon: "shield", urgent: true },
       { href: "/sessions", label: "Sessions", icon: "layers" },
     ],
@@ -31,7 +32,7 @@ const NAV: {
 ];
 
 const TITLES: Record<string, string> = {
-  "/": "Live feed",
+  "/dashboard": "Live feed",
   "/approvals": "Held actions",
   "/sessions": "Sessions",
   "/playground": "Playground",
@@ -45,8 +46,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [connected, setConnected] = useState(false);
   const [pending, setPending] = useState(0);
   const [retained, setRetained] = useState<boolean | null>(null);
+  const [navOpen, setNavOpen] = useState(false);
+
+  const isLanding = pathname === "/";
 
   useEffect(() => {
+    if (isLanding) return;
     // The shell keeps its own wire open, so the pending count stays right even
     // while the operator is looking at another page.
     const unsubscribe = subscribe(
@@ -59,9 +64,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
       setConnected,
     );
     return unsubscribe;
-  }, []);
+  }, [isLanding]);
 
   useEffect(() => {
+    if (isLanding) return;
     let alive = true;
     const poll = () => {
       api.pending().then((d) => alive && setPending(d.pending.length)).catch(() => undefined);
@@ -70,21 +76,29 @@ export function Shell({ children }: { children: React.ReactNode }) {
     poll();
     const timer = setInterval(poll, 15_000);
     return () => { alive = false; clearInterval(timer); };
-  }, [pathname]);
+  }, [pathname, isLanding]);
+
+  // Following a link on a phone should put the drawer away again.
+  useEffect(() => { setNavOpen(false); }, [pathname]);
+
+  // The transition is mounted outside the branch below so that it survives the
+  // navigation it triggers — otherwise it would unmount mid-sweep.
+  if (isLanding) {
+    return <>{children}<MembraneTransition /></>;
+  }
 
   const title = TITLES[pathname]
     ?? (pathname.startsWith("/sessions/") ? "Session replay" : "Membrane");
 
   return (
-    <div className="shell">
+    <div className="shell" data-nav={navOpen ? "open" : "closed"}>
+      <div className="scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />
+
       <aside className="sidebar">
-        <div className="logo">
-          <MembraneMark size={38} />
-          <span className="logo-type">
-            <span className="logo-word">Membrane</span>
-            <span className="logo-tag">Prompt-injection firewall</span>
-          </span>
-        </div>
+        <Link href="/" className="logo">
+          <MembraneMark size={30} />
+          <span className="logo-name">Membrane</span>
+        </Link>
 
         <nav className="nav">
           {NAV.map((group) => (
@@ -136,8 +150,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
       <div className="content">
         <header className="topbar">
+          <button className="nav-toggle" onClick={() => setNavOpen((v) => !v)}
+                  aria-label="Toggle navigation" aria-expanded={navOpen}>
+            <Icon name={navOpen ? "close" : "menu"} size={18} />
+          </button>
+
           <span className="topbar-title">{title}</span>
-          <span className="topbar-crumb">/ membrane</span>
 
           <span className="topbar-spacer" />
 
@@ -149,7 +167,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
           <span className="topbar-pill" data-live={connected}>
             <span className="dot" data-on={connected} />
-            {connected ? "Live" : "Offline"}
+            <span>{connected ? "Live" : "Offline"}</span>
           </span>
 
           <Link href="/approvals" className="icon-button" aria-label="Held actions">
@@ -160,6 +178,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
 
         <main className="main">{children}</main>
       </div>
+
+      <MembraneTransition />
     </div>
   );
 }

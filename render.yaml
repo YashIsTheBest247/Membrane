@@ -1,0 +1,104 @@
+# Membrane on Render — the API, its database and its event bus.
+#
+# The dashboard is not here. It is a static-ish Next.js app with no server
+# state, so it belongs on Vercel, and this blueprint only stands up the part
+# that has to be long-lived: the proxy, PostgreSQL, and Redis.
+#
+#   Render dashboard → New → Blueprint → point it at this repository.
+#
+# Two values are generated for you and never leave Render. One value has to be
+# filled in by hand after Vercel gives you a URL — see MEMBRANE_CORS_ORIGINS.
+#
+# Full walkthrough: docs/deploy-vercel-render.md
+
+services:
+  - type: web
+    name: membrane-api
+    runtime: docker
+    plan: starter          # free works, but see the note on sleep below
+    region: oregon         # keep the database in the SAME region
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+
+    envVars:
+      - key: MEMBRANE_ENVIRONMENT
+        value: prod
+
+      # Render injects PORT; the image's CMD already honours it.
+
+      # --- storage ------------------------------------------------------
+      # Render prints a libpq DSN (postgres://…). The proxy rewrites the
+      # scheme and translates sslmode for asyncpg on the way in, so this can
+      # be wired straight through.
+      - key: MEMBRANE_DATABASE_URL
+        fromDatabase:
+          name: membrane-db
+          property: connectionString
+
+      - key: MEMBRANE_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: membrane-cache
+          property: connectionString
+
+      # --- cryptography -------------------------------------------------
+      # Generated once by Render and never shown again. Rotating the salt
+      # breaks the comparability of an existing audit trail — see the docs.
+      - key: MEMBRANE_SIGNING_KEY
+        generateValue: true
+      - key: MEMBRANE_HASH_SALT
+        generateValue: true
+
+      # --- the browser origin -------------------------------------------
+      # SET THIS after the first Vercel deploy, to your production URL.
+      # The dashboard is on a different origin from the API, so without it
+      # every fetch and the event stream are blocked by the browser.
+      - key: MEMBRANE_CORS_ORIGINS
+        sync: false
+      # Optional: also allow Vercel preview deployments, which get a fresh
+      # hostname each time and so can never be listed exhaustively.
+      #   ^https://<project>-[a-z0-9-]+\.vercel\.app$
+      - key: MEMBRANE_CORS_ORIGIN_REGEX
+        sync: false
+
+      # --- privacy ------------------------------------------------------
+      # Previews stream inspected text to the console over SSE. Never
+      # persisted, but there is no reason to emit them in production.
+      - key: MEMBRANE_LIVE_PREVIEW_ENABLED
+        value: "false"
+      - key: MEMBRANE_REPLAY_RETENTION_ENABLED
+        value: "false"
+
+      # --- L2 tier two (optional) ---------------------------------------
+      # Without a key, spans that score between the ambiguous and quarantine
+      # thresholds fail closed to quarantine. With one, they are adjudicated,
+      # which recovers false positives rather than adding detections.
+      - key: MEMBRANE_GEMINI_API_KEY
+        sync: false
+
+      # --- human loop (optional) ----------------------------------------
+      # Leave unset and held actions are resolved in the dashboard instead.
+      - key: MEMBRANE_TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: MEMBRANE_TELEGRAM_CHAT_ID
+        sync: false
+
+  # Redis is genuinely optional: the event bus falls back to an in-process
+  # broadcaster when it is absent. It is here because with more than one
+  # instance the fallback only reaches subscribers on the same instance, so
+  # the live feed would show a fraction of the traffic.
+  - type: keyvalue
+    name: membrane-cache
+    plan: free
+    region: oregon
+    maxmemoryPolicy: noeviction
+    ipAllowList: []        # private network only
+
+databases:
+  - name: membrane-db
+    databaseName: membrane
+    user: membrane
+    plan: basic-256mb      # `free` works for a demo and expires after 30 days
+    region: oregon

@@ -84,6 +84,12 @@ export function Sparkline({
   const min = Math.min(...data, 0);
   const span = max - min || 1;
 
+  // An all-zero window would draw a flat rule along the bottom of the tile,
+  // which reads as a stray divider rather than as a chart. Draw nothing.
+  if (!data.some((value) => value > 0)) {
+    return <span className="spark" style={{ height }} aria-hidden="true" />;
+  }
+
   const points: Point[] = data.map((value, index) => [
     (index / Math.max(1, data.length - 1)) * W,
     H - 3 - ((value - min) / span) * (H - 6),
@@ -103,9 +109,10 @@ export function Sparkline({
         </linearGradient>
       </defs>
       <path d={area} fill={`url(#${id})`} />
-      <path d={line} fill="none" stroke={color} strokeWidth="2"
-            strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-      <circle cx={last[0]} cy={last[1]} r="2.4" fill={color}
+      <path d={line} fill="none" stroke={color} strokeWidth="1.8"
+            strokeLinecap="round" strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke" />
+      <circle cx={last[0]} cy={last[1]} r="2.2" fill={color}
               vectorEffect="non-scaling-stroke" />
     </svg>
   );
@@ -185,7 +192,7 @@ export function AreaChart({
             return (
               <g key={s.label}>
                 <path d={area} fill={`url(#${gradientId(index, s.label)})`} />
-                <path d={line} fill="none" stroke={s.color} strokeWidth="2.2"
+                <path d={line} fill="none" stroke={s.color} strokeWidth="2"
                       strokeLinecap="round" strokeLinejoin="round"
                       vectorEffect="non-scaling-stroke" />
               </g>
@@ -199,8 +206,8 @@ export function AreaChart({
                     strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />
               {series.map((s) => (
                 <circle key={s.label} cx={x(hover)} cy={y(s.values[hover] ?? 0)}
-                        r="4" fill="var(--surface)" stroke={s.color}
-                        strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+                        r="3.6" fill="var(--surface)" stroke={s.color}
+                        strokeWidth="2.4" vectorEffect="non-scaling-stroke" />
               ))}
             </g>
           )}

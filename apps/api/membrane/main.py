@@ -113,6 +113,9 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
+        # Additive, not a replacement: the list still holds the production
+        # origin, and the pattern covers per-deployment preview hostnames.
+        allow_origin_regex=settings.cors_origin_regex,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["*"],

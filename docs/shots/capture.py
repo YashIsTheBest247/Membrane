@@ -18,7 +18,12 @@ VIEWPORT = {"width": 1680, "height": 1050}
 
 SHOTS = [
     # (route, filename, settle_ms, full_page)
-    ("/", "01-dashboard.png", 4200, False),
+    # `/` is the landing page; the console moved to /dashboard when the hero
+    # went in. The landing needs longer to settle — the particle field runs an
+    # entrance sequence and the globe has to have turned far enough to read as
+    # a globe rather than as a scatter.
+    ("/", "00-landing.png", 6000, False),
+    ("/dashboard", "01-dashboard.png", 4200, False),
     ("/approvals", "02-held-action.png", 2600, False),
     ("/playground", "03-playground.png", 2200, False),
     ("/leaderboard", "04-injectbench.png", 2200, False),
@@ -34,7 +39,7 @@ def main() -> int:
         context = browser.new_context(
             viewport=VIEWPORT,
             device_scale_factor=2,          # retina, so it stays crisp on a projector
-            color_scheme="light",
+            color_scheme="dark",
         )
         page = context.new_page()
 
