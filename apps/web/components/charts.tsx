@@ -150,11 +150,39 @@ export function AreaChart({
 
   const [hover, setHover] = useState<number | null>(null);
 
+  // The window is rolling and fed only by the live stream, so on a freshly
+  // opened console it is legitimately empty. Drawing axes and a flat line at
+  // zero reads as broken; saying so reads as an instruction.
+  const empty = !series.some((s) => s.values.some((v) => v > 0));
+
   const onMove = (event: React.MouseEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
     const ratio = (event.clientX - box.left) / box.width;
     setHover(Math.max(0, Math.min(length - 1, Math.round(ratio * (length - 1)))));
   };
+
+  if (empty) {
+    return (
+      <div className="chart">
+        <div className="chart-empty" style={{ height }}>
+          <span className="chart-empty-title">No activity in this window</span>
+          <span className="chart-empty-sub">
+            The chart is the last 15 minutes, live over the event stream — it
+            fills as traffic arrives. Hit <strong>Run live attack</strong> to
+            drive some.
+          </span>
+        </div>
+        <div className="chart-legend">
+          {series.map((s) => (
+            <span key={s.label} className="legend-item">
+              <i style={{ background: s.color }} />
+              {s.label}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="chart">

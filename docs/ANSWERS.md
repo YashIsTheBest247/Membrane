@@ -22,7 +22,7 @@ where your own edges are.
 | **False-positive rate** | **1.33 %** — 1 of 75 benign spans |
 | **Added latency** | **p50 15 ms · p95 21 ms** (last published run); ~33 ms p95 on a cold cache |
 | **Endpoints** | 37 paths, 38 operations |
-| **Tests** | 77 passing — 68 proxy, 9 benchmark |
+| **Tests** | 92 passing — 83 proxy, 9 benchmark |
 | **Code** | ~8,850 lines Python, ~3,290 lines TypeScript |
 | **Benchmark** | InjectBench — 42 attacks, 9 families, 23 benign documents, published |
 | **Licence** | Apache 2.0, self-hostable, no vendor in the data path |
@@ -622,13 +622,13 @@ expiry. The signature is truncated to 64 bits because Telegram caps
 |---|---|---|
 | Proxy / API | Python 3.12, FastAPI, Pydantic, uvicorn | Async throughput, typed models; the agent ecosystem this defends is Python-native |
 | Sanitisation | `unicodedata`, BeautifulSoup, pypdf, Pillow | Standard library plus three well-known packages. Deterministic, no inference cost |
-| Classification | Vertex AI (Gemini) over REST + a local rule pass | One HTTP call, not an ML pipeline. Escalation only on ambiguity bounds cost, latency and exposure |
-| Data | PostgreSQL (Cloud SQL), SQLModel, Alembic | Contracts, policy, trust scores and the append-only audit table are ordinary relational rows, queryable with plain SQL |
-| Queue / realtime | Redis (Memorystore) | Held-action queue and the dashboard event stream. No managed message bus needed |
-| Human loop | Telegram Bot API + a FastAPI webhook route | The webhook is one more endpoint on the service already running — no second runtime |
+| Classification | Gemini over REST (or Vertex AI) + a local rule pass | One HTTP call, not an ML pipeline. Escalation only on ambiguity bounds cost, latency and exposure. Optional — see below |
+| Data | PostgreSQL, SQLModel, Alembic | Contracts, policy, trust scores and the append-only audit table are ordinary relational rows, queryable with plain SQL |
+| Queue / realtime | Redis | Held-action queue and the dashboard event stream. No managed message bus needed |
+| Human loop | Telegram Bot API — a FastAPI webhook route, or long-polling | The webhook is one more endpoint on the service already running. Polling is the same handler behind a different transport, for a laptop with no public URL |
 | Dashboard | Next.js 16, React, TypeScript | The live feed is a normal React view over server-sent events |
 | Benchmark | pytest + YAML attack definitions | Reproducible by any third party, which is the point of publishing it |
-| Deployment | Docker, Cloud Run, Cloud Build, GitHub Actions | Push to a branch, containers build, services redeploy. No infrastructure language |
+| Deployment | Docker Compose behind Caddy, or Vercel + Render | One host with automatic HTTPS, or the dashboard on a CDN and the proxy on a container platform. No infrastructure language either way |
 
 ### What does it take to run?
 
@@ -743,9 +743,17 @@ which is our single false positive.
 **"What's the performance cost at scale?"**
 p95 of 21 ms in the published run because the common case never calls a model.
 Only ambiguous spans escalate. The measurement is the full in-process ingest
-path; add HTTP overhead for a network deployment, and expect a higher p95 on the
-ambiguous minority when the model tier is enabled — which we would report
-separately rather than blending.
+path; add HTTP overhead for a network deployment.
+
+We have since measured the model tier rather than estimating it. With
+`gemini-2.5-flash` wired in, the same benchmark gives **p95 1526 ms** — a 70×
+increase, failing our own 100 ms target — while ASR reduction and false
+positives are **both unchanged**. p50 stays at 11 ms, because the median span
+never escalates; the cost falls entirely on the ambiguous minority. So the
+published numbers are the fail-closed configuration, and we say so. The model
+tier is insurance for content outside this corpus, not a contributor to the
+headline figures. If you want it on a blocking ingest path you should budget
+for that latency deliberately, or move the call off the critical path.
 
 **"How is this different from Lakera / Rebuff / prompt-guard?"**
 Those are classifiers: they answer "is this input malicious?" — the open-ended
@@ -758,6 +766,14 @@ publish the benchmark; most do not.
 **"What happens when the model tier is down?"**
 Ambiguous spans quarantine. Utility degrades, security does not. That is asserted
 in the tests — `test_ambiguous_spans_fail_closed_when_no_model_is_reachable`.
+
+That property is not theoretical, and we can show you the bug that proved it.
+When we first wired a live key, every call came back `finishReason: MAX_TOKENS`
+with empty text: we capped output at 4 tokens, and Gemini 2.5 spends output
+budget on internal reasoning before it answers. The parser read the empty reply
+as a failure and quarantined, exactly as designed — the system stayed correct
+and nothing unsafe passed. It was the latency that gave the fault away, not a
+security incident. That is the difference fail-closed buys you.
 
 **"How would I adopt this incrementally?"**
 Start in observe-only by ignoring the verdict and reading the audit trail — you
@@ -776,8 +792,17 @@ fixture names, i.e. exactly the enumerate-badness approach we criticise, so we
 removed them. All four were found by testing rather than by reading, which is the
 argument for the benchmark existing at all.
 
+Four more surfaced while making it deployable, and the pattern repeated: every
+one was found by running the thing, not by reading it. A `maxOutputTokens` cap
+of 4 starved a thinking model so the escalation tier looked configured and
+silently adjudicated nothing. `asyncpg` and `redis` were installed only in the
+Dockerfile, so any platform building from `requirements.txt` came up with no
+Postgres driver. Managed Postgres hands out `?sslmode=require`, which asyncpg
+rejects outright rather than ignoring. And CORS was an exact-match list, which
+can never cover a platform that mints a new hostname per deployment.
+
 **"Why should we believe any of this?"**
-Run it. `make test` is 77 assertions. `python -m injectbench` reproduces every
+Run it. `make test` is 92 assertions. `python -m injectbench` reproduces every
 number on this page. Both run in CI. The threat model document leads with what
 the system cannot do.
 
@@ -799,7 +824,7 @@ Every figure, with where it comes from.
 | False-positive rate | 1.33 % | 1 of 75 spans |
 | p50 latency | 15.2 ms | published run |
 | p95 latency | 21.1 ms | published run |
-| Tests | 77 | 68 proxy + 9 benchmark |
+| Tests | 92 | 83 proxy + 9 benchmark |
 | API endpoints | 37 paths / 38 operations | OpenAPI schema |
 | Capabilities | 20 (7 read, 5 write, 8 irreversible) | `GET /v1/capabilities` |
 | Python | ~8,850 lines | `wc -l` excluding venv |
@@ -830,8 +855,11 @@ cd apps/bench && python -m injectbench
                  python -m injectbench --publish http://localhost:8080
 
 # the tests
-cd apps/api && python -m pytest -q      # 68
+cd apps/api && python -m pytest -q      # 83
 cd apps/bench && python -m pytest -q    # 9
+
+# the human loop, from a laptop with no public URL
+python docs/demo/telegram_setup.py <bot-token>   # then: docker compose up -d api
 
 # useful endpoints in front of a judge
 curl localhost:8080/v1/stats
@@ -842,9 +870,14 @@ curl -X POST localhost:8080/v1/verify-span \
      -d '{"text":"...","span_hash":"sha256:..."}'   # proof without disclosure
 ```
 
+The console is at `localhost:3000/dashboard`. `localhost:3000` is the landing
+page — if you open on it, click **Enter Membrane** and let the transition finish
+before you start talking.
+
 **Documents:** `README.md` · `docs/architecture.md` · `docs/threat-model.md` ·
-`docs/api.md` · `docs/deployment.md` · `apps/bench/README.md` ·
-`docs/deck/SCRIPT.md` · `docs/demo/RUNBOOK.md`
+`docs/api.md` · `docs/CONFIGURATION.md` · `apps/bench/README.md` ·
+`docs/deck/SCRIPT.md` · `docs/demo/RUNBOOK.md` ·
+`deploy/README.md` (one host) · `docs/deploy-vercel-render.md` (split)
 
 ---
 

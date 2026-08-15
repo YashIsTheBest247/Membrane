@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import approvals, audit
+from . import approvals, audit, telegram
 from .config import get_settings
 from .db import dispose_db, init_db, session_scope
 from .events import bus
@@ -83,6 +83,16 @@ async def lifespan(app: FastAPI):
     app.state.started_at = time.time()
     app.state.janitor = asyncio.create_task(_janitor())
 
+    # The webhook is the production transport; this is the one that works from
+    # a laptop, where there is no public URL for Telegram to call back to.
+    app.state.telegram_stop = asyncio.Event()
+    app.state.telegram_poller = None
+    if settings.telegram_polling and telegram.configured():
+        from . import telegram_poller
+        app.state.telegram_poller = asyncio.create_task(
+            telegram_poller.run(app.state.telegram_stop)
+        )
+
     logger.info(
         "membrane up · env=%s · db=%s · redis=%s · telegram=%s",
         settings.environment,
@@ -96,6 +106,11 @@ async def lifespan(app: FastAPI):
         app.state.janitor.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await app.state.janitor
+        if app.state.telegram_poller is not None:
+            app.state.telegram_stop.set()
+            app.state.telegram_poller.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await app.state.telegram_poller
         await app.state.http_client.aclose()
         await bus.stop()
         await dispose_db()

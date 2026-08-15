@@ -59,6 +59,9 @@ services:
       # Optional: the human loop and the L2 model tier.
       MEMBRANE_TELEGRAM_BOT_TOKEN: ${MEMBRANE_TELEGRAM_BOT_TOKEN:-}
       MEMBRANE_TELEGRAM_CHAT_ID: ${MEMBRANE_TELEGRAM_CHAT_ID:-}
+      # Long-poll instead of receiving a webhook, so the human loop works from
+      # a laptop with no public URL.
+      MEMBRANE_TELEGRAM_POLLING: ${MEMBRANE_TELEGRAM_POLLING:-false}
       MEMBRANE_GEMINI_API_KEY: ${MEMBRANE_GEMINI_API_KEY:-}
       MEMBRANE_VERTEX_PROJECT: ${MEMBRANE_VERTEX_PROJECT:-}
     ports:

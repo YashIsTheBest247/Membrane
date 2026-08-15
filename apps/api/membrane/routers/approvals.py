@@ -141,21 +141,39 @@ async def telegram_webhook(
     except Exception:
         return Response(status_code=200)
 
+    await apply_telegram_update(
+        update, db, getattr(request.app.state, "http_client", None)
+    )
+    return Response(status_code=200)
+
+
+async def apply_telegram_update(update: dict, db: AsyncSession,
+                                client=None) -> bool:
+    """Resolve one held action from an inline-keyboard callback.
+
+    Shared by the webhook and by the long poller, so a decision taken on a
+    phone travels exactly the same path however the update reached us — same
+    signature check, same fail-closed branches, same audit entry.
+
+    Returns True when an action actually changed state.
+    """
     try:
         action_id, decision, callback_id, actor = telegram.parse_update(update)
     except telegram.CallbackRejected as exc:
         logger.warning("%s", exc)
-        return Response(status_code=200)
+        return False
 
     action = await queue.get(db, action_id)
     if action is None:
-        await telegram.answer_callback(callback_id, "This card is no longer known.")
-        return Response(status_code=200)
+        await telegram.answer_callback(
+            callback_id, "This card is no longer known.", client
+        )
+        return False
     if action.status is not ApprovalStatus.PENDING:
         await telegram.answer_callback(
-            callback_id, f"Already {action.status.value}."
+            callback_id, f"Already {action.status.value}.", client
         )
-        return Response(status_code=200)
+        return False
 
     resolved = await queue.resolve(
         db, action_id,
@@ -174,7 +192,6 @@ async def telegram_webhook(
     )
     await db.commit()
 
-    client = getattr(request.app.state, "http_client", None)
     await telegram.answer_callback(
         callback_id,
         "Approved for this call only." if resolved.status is ApprovalStatus.APPROVED
@@ -182,7 +199,7 @@ async def telegram_webhook(
         client,
     )
     await telegram.close_card(resolved, resolved.status.value, client)
-    return Response(status_code=200)
+    return True
 
 
 @router.post("/telegram/register")

@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
     telegram_api_base: str = "https://api.telegram.org"
+    # Long-poll for decisions instead of receiving a webhook. A webhook needs a
+    # public HTTPS URL; this does not, which is what makes the human loop
+    # demonstrable from a laptop. The decision path is identical either way.
+    telegram_polling: bool = False
     # Demo mode lets the dashboard resolve held actions when no bot is wired.
     dashboard_approvals_enabled: bool = True
 

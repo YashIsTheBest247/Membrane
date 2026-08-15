@@ -767,6 +767,17 @@ a.pill { text-decoration: none; }
 
 .chart { width: 100%; }
 .chart-canvas { position: relative; width: 100%; }
+
+.chart-empty {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 8px; text-align: center;
+  padding: 0 clamp(20px, 6vw, 80px);
+  border: 1px dashed var(--line); border-radius: var(--r);
+  background: rgba(255,255,255,0.012);
+}
+.chart-empty-title { font-size: 14px; font-weight: 500; color: var(--fg-secondary); letter-spacing: -0.014em; }
+.chart-empty-sub { font-size: 13px; line-height: 1.55; color: var(--fg-subtle); max-width: 52ch; letter-spacing: -0.01em; }
+.chart-empty-sub strong { color: var(--fg-secondary); font-weight: 500; }
 .chart-y {
   position: absolute; inset: 0 auto 0 0;
   display: flex; flex-direction: column; justify-content: space-between;
